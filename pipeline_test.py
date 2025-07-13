@@ -4,6 +4,7 @@ import psycopg2
 import librosa
 import numpy as np
 import yt_dlp
+import time
 
 # 🔧 DB Config
 DB_CONFIG = {
@@ -51,21 +52,6 @@ def download_audio(song_name, artist_name):
             print(f"❌ Failed to download {song_name} by {artist_name}: {e}")
             return None
 
-def analyze_audio(filepath):
-    try:
-        y, sr = librosa.load(filepath)
-        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-        chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
-        chroma_mean = np.mean(chroma, axis=1)
-        key_index = np.argmax(chroma_mean)
-        key_mapping = ['C', 'C#', 'D', 'D#', 'E', 'F',
-                       'F#', 'G', 'G#', 'A', 'A#', 'B']
-        key = key_mapping[key_index]
-        return float(tempo), key
-    except Exception as e:
-        print(f"❌ Analysis failed: {e}")
-        return None, None
-
 def update_song(song_id, bpm, key):
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
@@ -78,25 +64,59 @@ def update_song(song_id, bpm, key):
     cur.close()
     conn.close()
 
+def detect_major_minor(y, sr, key_index):
+    chroma_cq = librosa.feature.chroma_cqt(y=y, sr=sr)
+    major_profile = [1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1]
+    minor_profile = [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0]
+
+    major_score = np.dot(major_profile, chroma_cq.mean(axis=1))
+    minor_score = np.dot(minor_profile, chroma_cq.mean(axis=1))
+    return "major" if major_score > minor_score else "minor"
+
 def run_pipeline():
     songs = get_songs_to_analyze()
+    total_start = time.time()
+
     for song_id, name, artist in songs:
         print(f"\n🎧 Processing: {name} — {artist}")
+        song_start = time.time()
+
         filepath = download_audio(name, artist)
         if not filepath or not os.path.exists(filepath):
             continue
 
-        bpm, key = analyze_audio(filepath)
-        if bpm and key:
-            update_song(song_id, bpm, key)
-            print(f"✅ Updated DB: {name} → BPM: {bpm:.2f}, Key: {key}")
-        else:
-            print("⚠️ Could not analyze song.")
+        try:
+            y, sr = librosa.load(filepath)
+            duration = len(y) / sr
+            print(f"⏱️ Duration: {duration:.2f} sec")
+
+            tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+            tempo = float(tempo.item()) if isinstance(tempo, np.ndarray) else float(tempo)
+
+            chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
+            chroma_mean = np.mean(chroma, axis=1)
+            key_index = np.argmax(chroma_mean)
+
+            key_mapping = ['C', 'C#', 'D', 'D#', 'E', 'F',
+                           'F#', 'G', 'G#', 'A', 'A#', 'B']
+            key_note = key_mapping[key_index]
+            mode = detect_major_minor(y, sr, key_index)
+            full_key = f"{key_note} {mode}"
+
+            update_song(song_id, tempo, full_key)
+            print(f"✅ Updated DB: {name} → BPM: {tempo:.2f}, Key: {full_key}")
+
+        except Exception as e:
+            print(f"❌ Analysis failed: {e}")
 
         try:
             os.remove(filepath)
         except Exception as e:
             print(f"⚠️ Could not delete temp file: {e}")
+
+        print(f"🕒 Song processed in {time.time() - song_start:.2f} sec")
+
+    print(f"\n✅ Pipeline completed in {time.time() - total_start:.2f} sec")
 
 if __name__ == "__main__":
     run_pipeline()
