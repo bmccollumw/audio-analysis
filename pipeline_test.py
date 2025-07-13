@@ -7,9 +7,9 @@ import yt_dlp
 
 # 🔧 DB Config
 DB_CONFIG = {
-    "dbname": "spotify_music_bank",
+    "dbname": "spotify_app_db",
     "user": "postgres",
-    "password": "pogomuffboo123word_here",
+    "password": "pogomuffboo0823",
     "host": "localhost",
     "port": 5432
 }
